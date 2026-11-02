@@ -174,12 +174,25 @@ final class OutgoingMessage
     /**
      * Отправляет сообщение; при превышении лимита длины разбивает текст.
      *
-     * @param int|string|null $peerId Адресат «на месте»: ->send($vkId) без ->to().
+     * @param int|string|list<int|string>|null $peerId Адресат «на месте»: ->send($vkId)
+     *        без ->to(); список id — рассылка того же сообщения каждому (BC v3).
      *
-     * @return list<int> ID отправленных сообщений.
+     * @return list<int> ID отправленных сообщений (при рассылке — по всем адресатам).
      */
-    public function send(int|string|null $peerId = null): array
+    public function send(int|string|array|null $peerId = null): array
     {
+        if (\is_array($peerId)) {
+            $sentIds = [];
+
+            foreach ($peerId as $id) {
+                // Клон: адресат не должен затирать состояние исходного сообщения,
+                // иначе второй проход рассылки уйдёт не туда.
+                $sentIds = [...$sentIds, ...(clone $this)->to($id)->send()];
+            }
+
+            return $sentIds;
+        }
+
         if ($peerId !== null && $this->peerId === null && $this->userId === null) {
             $this->to($peerId);
         }
