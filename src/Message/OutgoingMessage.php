@@ -65,10 +65,12 @@ final class OutgoingMessage
     /**
      * Добавляет вложение: 'photo123_456', результат FileUploader и т.д.
      */
-    public function attachment(string ...$attachments): self
+    public function attachment(?string ...$attachments): self
     {
         foreach ($attachments as $attachment) {
-            if ($attachment !== '') {
+            // null допустим: код v3 передавал сюда результат “может быть null”
+            // (например, картинку локации из конфига) и ожидал «просто без вложения».
+            if ($attachment !== null && $attachment !== '') {
                 $this->attachments[] = $attachment;
             }
         }
