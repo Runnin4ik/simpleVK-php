@@ -10,9 +10,10 @@ use DigitalStars\SimpleVK\Exception\SimpleVkException;
 /**
  * Цикл longpoll: получает пачки апдейтов, отсекает дубли и отдаёт события наружу.
  *
- * Раннер не знает, что делать с событием: обработчик решает сам (синхронно,
- * в корутине, в очереди). Так библиотека остаётся без привязки к рантайму —
- * проект может добавить лимит параллельных обработчиков или сигналы поверх.
+ * Раннер отдаёт пачку событий целиком: обработчик волен разобрать её синхронно,
+ * параллельно в корутинах или в очереди. Пачка — естественный предел параллелизма,
+ * поэтому следующий poll начинается только после возврата обработчика (backpressure).
+ * Библиотека остаётся без привязки к рантайму: корутины и сигналы — дело проекта.
  *
  * Ошибки poll-а (сеть, failed:1/2/3, истёкший ключ) не завершают цикл: они уходят
  * в onError, после чего раннер ждёт pauseMs и продолжает с переинициализации сервера.
@@ -35,9 +36,9 @@ final class LongPollRunner
      * Запускает бесконечный цикл. Возврат — только по исключению обработчика
      * (например, AsyncCancellation при graceful shutdown) или фатальной ошибке.
      *
-     * @param callable(Update): void $onUpdate
+     * @param callable(list<Update>): void $onBatch Пачка уже без дублей; может быть пустой.
      */
-    public function run(callable $onUpdate): void
+    public function run(callable $onBatch): void
     {
         if ($this->skipBacklogOnStart) {
             $this->longPoll->skipBacklog();
@@ -58,13 +59,15 @@ final class LongPollRunner
                 continue;
             }
 
-            foreach ($updates as $update) {
-                if ($this->dedup !== null && !$this->dedup->claim($update)) {
-                    continue;
-                }
+            $fresh = [];
 
-                $onUpdate($update);
+            foreach ($updates as $update) {
+                if ($this->dedup === null || $this->dedup->claim($update)) {
+                    $fresh[] = $update;
+                }
             }
+
+            $onBatch($fresh);
         }
     }
 }

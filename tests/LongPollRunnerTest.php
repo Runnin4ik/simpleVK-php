@@ -37,13 +37,12 @@ final class LongPollRunnerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('stop');
 
-        $runner->run(static function (Update $update) use (&$delivered): void {
-            $delivered[] = $update->eventId;
-
-            if (\count($delivered) === 2) {
-                throw new \RuntimeException('stop');
-            }
+        $runner->run(static function (array $updates) use (&$delivered): void {
+            $delivered = [...$delivered, ...\array_column($updates, 'eventId')];
+            throw new \RuntimeException('stop');
         });
+
+        self::assertSame([1, 3], $delivered);
     }
 
     public function testDedupIsAskedForEveryUpdateInOrder(): void
@@ -71,8 +70,8 @@ final class LongPollRunnerTest extends TestCase
         };
 
         try {
-            $runner->run(static function (Update $update) use (&$seen): void {
-                $seen[] = $update->eventId;
+            $runner->run(static function (array $updates) use (&$seen): void {
+                $seen = [...$seen, ...\array_column($updates, 'eventId')];
             });
         } catch (\RuntimeException) {
             // цикл остановлен из wait()
@@ -97,15 +96,17 @@ final class LongPollRunnerTest extends TestCase
         );
 
         $received = [];
-        $longPoll->onWait = static function (int $call): void {
+        $batchesSeen = 0;
+        $longPoll->onWait = static function (int $call) use (&$batchesSeen): void {
             if ($call > 2) {
                 throw new \RuntimeException('stop');
             }
         };
 
         try {
-            $runner->run(static function (Update $update) use (&$received): void {
-                $received[] = $update->eventId;
+            $runner->run(static function (array $updates) use (&$received, &$batchesSeen): void {
+                $received = [...$received, ...\array_column($updates, 'eventId')];
+                $batchesSeen++;
             });
         } catch (\RuntimeException) {
             // после второй попытки wait() цикл прерван тестом
@@ -113,6 +114,7 @@ final class LongPollRunnerTest extends TestCase
 
         self::assertSame(['VK longpoll failed: 2'], $errors);
         self::assertSame([1], $received, 'после ошибки цикл продолжился и получил апдейт');
+        self::assertSame(1, $batchesSeen);
     }
 
     public function testSkipBacklogCalledOnceBeforeLoop(): void
@@ -123,7 +125,9 @@ final class LongPollRunnerTest extends TestCase
         $runner = new LongPollRunner($longPoll, skipBacklogOnStart: true);
 
         try {
-            $runner->run(static fn(Update $u): null => null);
+            $runner->run(static function (array $updates): void {
+                throw new \RuntimeException('stop');
+            });
         } catch (\RuntimeException) {
             // ожидаемо
         }
