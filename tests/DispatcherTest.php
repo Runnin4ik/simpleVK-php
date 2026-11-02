@@ -27,6 +27,25 @@ final class DispatcherTest extends TestCase
 
     private EventDispatcher $dispatcher;
 
+    public function testGlobalMiddlewareRunsForEveryTopLevelEvent(): void
+    {
+        \DigitalStars\SimpleVK\Tests\tmp_actions\EchoMiddleware::$hits = 0;
+
+        $config = new \DigitalStars\SimpleVK\Dispatcher\DispatcherConfig([$this->actionsDir]);
+        $config->withMiddleware([\DigitalStars\SimpleVK\Tests\tmp_actions\EchoMiddleware::class]);
+
+        $dispatcher = new EventDispatcher(
+            $config,
+            new ArgumentResolver(),
+            new ApiClient(ClientConfig::create('T', 5), $this->fake),
+        );
+
+        $dispatcher->handle($this->incomingMessage('/start'));
+        $dispatcher->handle($this->incomingMessage('/start'));
+
+        self::assertSame(2, \DigitalStars\SimpleVK\Tests\tmp_actions\EchoMiddleware::$hits);
+    }
+
     protected function setUp(): void
     {
         $this->actionsDir = __DIR__ . '/tmp_actions';

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace DigitalStars\SimpleVK\Message;
 
+use DigitalStars\SimpleVK\Dispatcher\Attributes\AsButton;
 use DigitalStars\SimpleVK\Dispatcher\BaseButton;
 
 /**
@@ -68,12 +69,21 @@ final class Keyboard implements \JsonSerializable
                     throw new \LogicException('В строке клавиатуры ожидается экземпляр ' . BaseButton::class);
                 }
 
+                // Атрибут — метаданные по умолчанию: явные ->label()/->color()/
+                // ->type() на экземпляре всегда важнее (динамические кнопки).
+                $meta = self::attributeFor($button);
+
                 $payload = $button->getPayload();
-                $action = $payload['action'] ?? self::defaultPayloadAction($button::class);
+                $action = $payload['action'] ?? $meta?->payload ?? self::defaultPayloadAction($button::class);
                 $payload += ['action' => $action];
 
                 $type = \strtolower($button->getType() ?? 'text');
-                $label = $button->getLabel() ?? 'Кнопка';
+
+                if ($type === 'text' && $meta !== null) {
+                    $type = \strtolower($meta->type);
+                }
+
+                $label = $button->getLabel() ?? $meta?->label ?? 'Кнопка';
 
                 $vkButton = match ($type) {
                     'callback' => Button::callback($label, $payload),
@@ -90,7 +100,7 @@ final class Keyboard implements \JsonSerializable
                     'negative' => Button::COLOR_NEGATIVE,
                     'positive' => Button::COLOR_POSITIVE,
                 ];
-                $color = $colorMap[\strtolower($button->getColor() ?? 'blue')] ?? null;
+                $color = $colorMap[\strtolower($button->getColor() ?? $meta?->color ?? 'blue')] ?? null;
                 if ($color !== null) {
                     $vkButton = $vkButton->color($color);
                 }
@@ -102,6 +112,21 @@ final class Keyboard implements \JsonSerializable
         }
 
         return $keyboard;
+    }
+
+    /** @var array<class-string, AsButton|null> */
+    private static array $attributeCache = [];
+
+    private static function attributeFor(BaseButton $button): ?AsButton
+    {
+        $class = $button::class;
+
+        if (!\array_key_exists($class, self::$attributeCache)) {
+            $attribute = new \ReflectionClass($class)->getAttributes(AsButton::class)[0] ?? null;
+            self::$attributeCache[$class] = $attribute?->newInstance();
+        }
+
+        return self::$attributeCache[$class];
     }
 
     /**

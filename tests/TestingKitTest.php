@@ -100,9 +100,9 @@ final class TestingKitTest extends TestCase
         self::assertArrayHasKey('keyboard', $params);
         self::assertStringContainsString('KitButton', (string) $params['keyboard']);
         self::assertStringContainsString(
-            'primary',
+            'positive',
             (string) $params['keyboard'],
-            'цвет green маппится в primary (VK-палитра)',
+            'цвет green из #[AsButton] маппится в positive (VK-палитра)',
         );
     }
 

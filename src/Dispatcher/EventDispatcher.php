@@ -82,6 +82,10 @@ class EventDispatcher
     {
         $startedAt = \microtime(true);
         $outboxBefore = \count($this->outbox());
+        // Новое событие — новый top-level: глобальный middleware применяется снова.
+        // Без сброса второе и последующие события его теряли (пропадала
+        // регистрация пользователя/идентичность).
+        $this->globalMiddlewareApplied = false;
 
         [$context, $payload, $eventType] = $this->prepare($event);
         $text = $context->messageText;

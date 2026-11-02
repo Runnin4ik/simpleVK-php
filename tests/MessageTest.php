@@ -22,6 +22,25 @@ final class MessageTest extends TestCase
         return [Bot::create(ClientConfig::create('T', 5)->withTransport($fake)), $fake];
     }
 
+    public function testFromButtonsTakesLabelColorAndPayloadFromAttribute(): void
+    {
+        $kb = Keyboard::fromButtons([[new \DigitalStars\SimpleVK\Tests\tmp_actions\PingBtn()]])->toArray();
+        $button = $kb['buttons'][0][0];
+
+        self::assertSame('Тестовая кнопка', $button['action']['label']);
+        self::assertSame('positive', $button['color']);
+        self::assertSame('{"action":"PingBtn"}', $button['action']['payload']);
+    }
+
+    public function testFromButtonsKeepsExplicitLabelOverAttribute(): void
+    {
+        $btn = (new \DigitalStars\SimpleVK\Tests\tmp_actions\PingBtn())->label('Своя')->color('red');
+        $kb = Keyboard::fromButtons([[$btn]])->toArray();
+
+        self::assertSame('Своя', $kb['buttons'][0][0]['action']['label']);
+        self::assertSame('negative', $kb['buttons'][0][0]['color']);
+    }
+
     public function testKeyboardStructure(): void
     {
         $kb = Keyboard::make()
