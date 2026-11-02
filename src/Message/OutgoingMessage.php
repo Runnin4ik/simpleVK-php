@@ -92,7 +92,7 @@ final class OutgoingMessage
      * Принимает как готовый Keyboard, так и массив строк экземпляров кнопок
      * (BaseButton или Message\Button) — второй случай оборачивается в Keyboard.
      *
-     * @param array<list<mixed>>|Keyboard $kbd
+     * @param array<list<mixed>>|array<BaseButton>|Keyboard|BaseButton $kbd
      */
     public function kbd(array|Keyboard|BaseButton $kbd, bool $inline = false, bool $oneTime = false): self
     {
