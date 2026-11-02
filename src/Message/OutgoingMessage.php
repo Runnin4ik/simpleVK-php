@@ -101,7 +101,9 @@ final class OutgoingMessage
             $kbd instanceof Keyboard => $kbd,
             $kbd instanceof BaseButton => Keyboard::fromButtons([[$kbd]]),
             \is_array($kbd) && $kbd !== [] && !\is_array(\reset($kbd)) => Keyboard::fromButtons([\array_values($kbd)]),
-            default => Keyboard::fromButtons($kbd),
+            default => Keyboard::fromButtons(\array_map(static fn(array|BaseButton $row): array => (
+                \is_array($row) ? \array_values($row) : [$row]
+            ), $kbd)),
         };
 
         if ($inline) {

@@ -31,4 +31,28 @@ final class PlaceholdersTest extends TestCase
 
         self::assertSame('просто текст', Placeholders::resolve($api, 'просто текст'));
     }
+
+    public function testAffectedUsersCollectsForwardReplyMentionAndLink(): void
+    {
+        $transport = new FakeTransport([
+            'utils.resolveScreenName' => ['type' => 'group', 'object_id' => 456],
+        ]);
+        $api = new ApiClient(ClientConfig::create(token: 'test', groupId: 1), $transport);
+
+        $message = [
+            'from_id' => 1,
+            'text' => 'привет [id555|Вася] и vk.com/club456',
+            'reply_message' => ['from_id' => 444, 'text' => '[club777|Пабы]'],
+            'fwd_messages' => [['from_id' => 333, 'text' => '']],
+        ];
+
+        self::assertSame(
+            [333, 444, -777, 555, -456],
+            \DigitalStars\SimpleVK\Service\Mentions::affectedUsers($api, $message),
+        );
+
+        $byCategory = \DigitalStars\SimpleVK\Service\Mentions::affectedUsers($api, $message, useCategory: true);
+        self::assertSame([555], $byCategory['mention']);
+        self::assertSame([444, -777], $byCategory['reply']);
+    }
 }
