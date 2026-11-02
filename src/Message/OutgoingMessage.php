@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DigitalStars\SimpleVK\Message;
 
 use DigitalStars\SimpleVK\ApiClient;
+use DigitalStars\SimpleVK\Dispatcher\BaseButton;
 use DigitalStars\SimpleVK\Exception\SimpleVkException;
 
 /**
@@ -93,9 +94,15 @@ final class OutgoingMessage
      *
      * @param array<list<mixed>>|Keyboard $kbd
      */
-    public function kbd(array|Keyboard $kbd, bool $inline = false, bool $oneTime = false): self
+    public function kbd(array|Keyboard|BaseButton $kbd, bool $inline = false, bool $oneTime = false): self
     {
-        $keyboard = $kbd instanceof Keyboard ? $kbd : Keyboard::fromButtons($kbd);
+        // BC v3: принимается и одна кнопка, и плоский список кнопок, и строки клавиатуры.
+        $keyboard = match (true) {
+            $kbd instanceof Keyboard => $kbd,
+            $kbd instanceof BaseButton => Keyboard::fromButtons([[$kbd]]),
+            \is_array($kbd) && $kbd !== [] && !\is_array(\reset($kbd)) => Keyboard::fromButtons([\array_values($kbd)]),
+            default => Keyboard::fromButtons($kbd),
+        };
 
         if ($inline) {
             $keyboard = $keyboard->inline();
@@ -174,7 +181,7 @@ final class OutgoingMessage
     /**
      * Отправляет сообщение; при превышении лимита длины разбивает текст.
      *
-     * @param int|string|list<int|string>|null $peerId Адресат «на месте»: ->send($vkId)
+     * @param int|string|array<array-key, int|string>|null $peerId Адресат «на месте»: ->send($vkId)
      *        без ->to(); список id — рассылка того же сообщения каждому (BC v3).
      *
      * @return list<int> ID отправленных сообщений (при рассылке — по всем адресатам).
