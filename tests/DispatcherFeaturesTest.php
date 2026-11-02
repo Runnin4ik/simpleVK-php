@@ -4,17 +4,17 @@ declare(strict_types=1);
 
 namespace DigitalStars\SimpleVK\Tests;
 
-use DigitalStars\SimpleVK\Tests\tmp_actions\EchoMiddleware;
-use DigitalStars\SimpleVK\Tests\tmp_actions\ExceptionHandlerAction;
-use DigitalStars\SimpleVK\Tests\tmp_actions\GreetAction;
-use DigitalStars\SimpleVK\Tests\tmp_actions\ScopedChildAction;
-use DigitalStars\SimpleVK\Tests\tmp_throttled\LimitedAction;
 use DigitalStars\SimpleVK\ApiClient;
 use DigitalStars\SimpleVK\Config\ClientConfig;
 use DigitalStars\SimpleVK\Dispatcher\ArgumentResolver;
 use DigitalStars\SimpleVK\Dispatcher\DispatcherConfig;
 use DigitalStars\SimpleVK\Dispatcher\EventDispatcher;
 use DigitalStars\SimpleVK\Message\IncomingMessage;
+use DigitalStars\SimpleVK\Tests\tmp_actions\EchoMiddleware;
+use DigitalStars\SimpleVK\Tests\tmp_actions\ExceptionHandlerAction;
+use DigitalStars\SimpleVK\Tests\tmp_actions\GreetAction;
+use DigitalStars\SimpleVK\Tests\tmp_actions\ScopedChildAction;
+use DigitalStars\SimpleVK\Tests\tmp_throttled\LimitedAction;
 use DigitalStars\SimpleVK\Transport\FakeTransport;
 use PHPUnit\Framework\TestCase;
 

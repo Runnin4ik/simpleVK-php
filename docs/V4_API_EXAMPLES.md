@@ -180,6 +180,44 @@ $bot = Bot::create(ClientConfig::create(token: 'test', groupId: 1)->withTranspor
 $bot->onMessage(fn(IncomingMessage $m) => $m->text('ok')->send());
 $bot->dispatch(TestData::message(text: '/start'));  // фабрика тестовых апдейтов
 
+## 12. Оффлайн-песочница и телеметрия диспетчера
+
+`Sandbox` прогоняет реальный диспетчер на подготовленных апдейтах и отдаёт
+`DispatchResult` (сработавший Action, outbox, ошибка, время). Ничего не уходит в VK.
+
+```php
+$sandbox = Sandbox::create(['/path/to/actions']);          // FakeTransport внутри
+$result  = $sandbox->say('/start', from: 123);            // обычное сообщение
+$result  = $sandbox->click('LootTypeBtn', ['type' => 2]); // клик по кнопке
+$result  = $sandbox->dispatchJson($rawJson);              // сырой апдейт
+
+$result->actionClass;        // DigitalStars\SimpleVK\...\StartAction
+$result->sent(fn($p) => str_contains($p['message'], 'ok'));
+$result->messages()[0];      // параметры messages.send (keyboard, reply_to, …)
+$result->error;              // исключение обработчика (dispatch не бросает)
+```
+
+В `handle()`/`Bot::run()` поведение прежнее: исключения не проглатываются.
+
+CLI-песочница (для ручной проверки в терминале):
+
+```bash
+php bin/svk-sandbox --actions=./src/Bot --text="/start" --from=123
+php bin/svk-sandbox --actions=./src/Bot --click=LootTypeBtn --payload='{"type":2}'
+php bin/svk-sandbox --actions=./src/Bot --json=update.json
+echo '{"type":"message_new",...}' | php bin/svk-sandbox --actions=./src/Bot --stdin
+php bin/svk-sandbox --actions=./src/Bot --repl      # интерактивно
+```
+
+`--bootstrap=file.php` возвращает `['actionsPaths' => [...], 'container' => $psr11]`,
+если нужен DI-контейнер приложения.
+
+Совместимость с v3 на стороне Context:
+`$ctx->reply('текст')` снова отправляет сразу (возвращает conversation_message_id),
+цепочка с клавиатурой — `$ctx->replyMessage('текст')->kbd($rows)->send()`,
+массив строк кнопок поддерживается прямо в `->kbd([[...]])`.
+
+
 assert($transport->calls[0]['method'] === 'messages.send');
 ```
 

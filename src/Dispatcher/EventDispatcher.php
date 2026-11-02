@@ -12,7 +12,9 @@ use DigitalStars\SimpleVK\Dispatcher\Attributes\Throttle;
 use DigitalStars\SimpleVK\Dispatcher\Attributes\Trigger;
 use DigitalStars\SimpleVK\Dispatcher\Attributes\UseMiddleware;
 use DigitalStars\SimpleVK\Event\Update;
+use DigitalStars\SimpleVK\Event\UpdateType;
 use DigitalStars\SimpleVK\Message\IncomingMessage;
+use DigitalStars\SimpleVK\Transport\FakeTransport;
 use LogicException;
 use Psr\SimpleCache\CacheInterface;
 use ReflectionClass;
@@ -59,11 +61,108 @@ class EventDispatcher
      * Обрабатывает событие: строит Context, находит маршрут и запускает Action.
      *
      * @param IncomingMessage|Update|array<string, mixed> $event Событие из Bot::dispatch или сырое.
+     *
+     * @throws \Throwable Исключение обработчика (как и до появления dispatch()).
      */
     public function handle(IncomingMessage|Update|array $event): void
     {
+        $this->dispatch($event);
+    }
+
+    /**
+     * Прогоняет событие и возвращает телеметрию: Action, outbox, ошибки, время.
+     *
+     * Отличие от handle() только в том, что при `$throwOnError = false`
+     * исключение обработчика не летит наружу, а кладётся в результат — это
+     * то, что нужно тестам и песочнице.
+     *
+     * @param IncomingMessage|Update|array<string, mixed> $event
+     */
+    public function dispatch(IncomingMessage|Update|array $event, bool $throwOnError = true): DispatchResult
+    {
+        $startedAt = \microtime(true);
+        $outboxBefore = \count($this->outbox());
+
+        [$context, $payload, $eventType] = $this->prepare($event);
+        $text = $context->messageText;
+
+        $route = $this->findRoute($text, $payload);
+        $result = fn(?array $route, ?\Throwable $error = null): DispatchResult => new DispatchResult(
+            actionClass: $route['actionClass'] ?? null,
+            eventType: $eventType,
+            userId: $context->userId,
+            peerId: $context->peerId,
+            text: $text,
+            payload: $payload,
+            routeArgs: $route['actionArgs'] ?? [],
+            handled: $route !== null && $error === null,
+            error: $error,
+            durationMs: (\microtime(true) - $startedAt) * 1000,
+            outbox: \array_slice($this->outbox(), $outboxBefore),
+        );
+
+        if ($route === null) {
+            if ($this->config->debug) {
+                $payloadJson = $payload === null ? 'null' : \json_encode($payload, \JSON_UNESCAPED_UNICODE);
+                \trigger_error(
+                    "Диспетчер: не найден маршрут. Text: '{$text}', Payload: {$payloadJson}. Fallback не настроен.",
+                    E_USER_WARNING,
+                );
+            }
+
+            return $result(null);
+        }
+
+        try {
+            $this->runAction($route['actionClass'], $context, $route['actionArgs']);
+        } catch (Throwable $e) {
+            if ($throwOnError) {
+                throw $e;
+            }
+
+            return $result($route, $e);
+        }
+
+        return $result($route);
+    }
+
+    /**
+     * Приводит событие к Context + payload: сырой массив → Update → IncomingMessage.
+     *
+     * @param IncomingMessage|Update|array<string, mixed> $event
+     *
+     * @return array{Context, array<string, mixed>|null, UpdateType|null}
+     */
+    private function prepare(IncomingMessage|Update|array $event): array
+    {
+        if (\is_array($event)) {
+            $event = Update::fromLongPoll($event);
+        }
+
+        $eventType = $event instanceof Update ? $event->type : null;
+
+        if (
+            $event instanceof Update
+            && \in_array(
+                $eventType,
+                [
+                    UpdateType::MessageNew,
+                    UpdateType::MessageReply,
+                    UpdateType::MessageEdit,
+                ],
+                true,
+            )
+        ) {
+            if ($this->api === null) {
+                throw new LogicException(
+                    'Для разбора message-события передайте ApiClient в конструктор EventDispatcher',
+                );
+            }
+
+            $event = new IncomingMessage($event, $this->api, $event->groupId);
+        }
+
         if ($event instanceof IncomingMessage) {
-            $payload = $event->payload();
             $rawText = $event->text();
             $text = \is_string($rawText) ? $rawText : null;
 
@@ -77,58 +176,77 @@ class EventDispatcher
                 messageText: $text,
                 factory: $this->config->getFactory(),
             );
-        } else {
-            if (\is_array($event)) {
-                $event = Update::fromLongPoll($event);
-            }
 
-            // Для callback-кнопок payload лежит в object.payload, для остальных событий — нет.
-            $object = $event->object();
-            $payloadJson = $object['payload'] ?? null;
-            $payload = null;
-            if (\is_string($payloadJson) && $payloadJson !== '') {
-                try {
-                    $decoded = \json_decode($payloadJson, true, flags: \JSON_THROW_ON_ERROR);
-                    $payload = \is_array($decoded) ? $decoded : null;
-                } catch (\JsonException) {
-                    $payload = null;
-                }
-            }
-
-            if ($this->api === null) {
-                throw new LogicException('Для не-message событий передайте ApiClient в конструктор EventDispatcher');
-            }
-
-            $userId = isset($object['from_id']) && is_numeric($object['from_id']) ? (int) $object['from_id'] : null;
-
-            $context = new Context(
-                api: $this->api,
-                dispatcher: $this,
-                argumentResolver: $this->argumentResolver,
-                event: $object,
-                userId: $userId,
-                peerId: isset($object['peer_id']) && is_numeric($object['peer_id']) ? (int) $object['peer_id'] : null,
-                messageText: \is_string($object['text'] ?? null) ? $object['text'] : null,
-                factory: $this->config->getFactory(),
-            );
-            $text = $context->messageText;
+            return [$context, $event->payload(), $eventType];
         }
 
-        $route = $this->findRoute($text, $payload);
+        [$context, $payload] = $this->prepareNonMessage($event, $eventType);
 
-        if ($route === null) {
-            if ($this->config->debug) {
-                $payloadJson = $payload === null ? 'null' : \json_encode($payload, \JSON_UNESCAPED_UNICODE);
-                \trigger_error(
-                    "Диспетчер: не найден маршрут. Text: '{$text}', Payload: {$payloadJson}. Fallback не настроен.",
-                    E_USER_WARNING,
-                );
-            }
+        return [$context, $payload, $eventType];
+    }
 
-            return;
+    /**
+     * Контекст для callback и прочих не-message апдейтов.
+     *
+     * @return array{Context, array<string, mixed>|null}
+     */
+    private function prepareNonMessage(Update $event, ?UpdateType $eventType): array
+    {
+        if ($this->api === null) {
+            throw new LogicException('Для не-message событий передайте ApiClient в конструктор EventDispatcher');
         }
 
-        $this->runAction($route['actionClass'], $context, $route['actionArgs']);
+        $object = $event->object();
+        $message = \is_array($object['message'] ?? null) ? $object['message'] : null;
+        $payload = self::decodePayload($message['payload'] ?? $object['payload'] ?? null);
+
+        // message_new кладёт автора в from_id, message_event (клик по кнопке) — в user_id.
+        $userIdRaw = $message['from_id'] ?? $object['from_id'] ?? $object['user_id'] ?? null;
+        $peerIdRaw = $object['peer_id'] ?? $message['peer_id'] ?? null;
+        $textRaw = $message['text'] ?? $object['text'] ?? null;
+
+        $context = new Context(
+            api: $this->api,
+            dispatcher: $this,
+            argumentResolver: $this->argumentResolver,
+            event: $message ?? $object,
+            userId: \is_numeric($userIdRaw) ? (int) $userIdRaw : null,
+            peerId: \is_numeric($peerIdRaw) ? (int) $peerIdRaw : null,
+            messageText: \is_string($textRaw) ? $textRaw : null,
+            factory: $this->config->getFactory(),
+        );
+
+        return [$context, $payload];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private static function decodePayload(mixed $payloadJson): ?array
+    {
+        if (!\is_string($payloadJson) || $payloadJson === '') {
+            return null;
+        }
+
+        try {
+            $decoded = \json_decode($payloadJson, true, flags: \JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
+        return \is_array($decoded) ? $decoded : null;
+    }
+
+    /**
+     * Записанные вызовы транспорта (если он умеет их записывать — FakeTransport).
+     *
+     * @return list<array{method: string, params: array<string, mixed>}>
+     */
+    private function outbox(): array
+    {
+        $transport = $this->api?->transport();
+
+        return $transport instanceof FakeTransport ? $transport->calls : [];
     }
 
     /**

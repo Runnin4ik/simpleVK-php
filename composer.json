@@ -78,5 +78,8 @@
         }
     },
     "minimum-stability": "beta",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "bin": [
+        "bin/svk-sandbox"
+    ]
 }

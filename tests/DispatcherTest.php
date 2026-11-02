@@ -4,9 +4,6 @@ declare(strict_types=1);
 
 namespace DigitalStars\SimpleVK\Tests;
 
-use DigitalStars\SimpleVK\Tests\tmp_actions\CatchAllAction;
-use DigitalStars\SimpleVK\Tests\tmp_actions\PingBtn;
-use DigitalStars\SimpleVK\Tests\tmp_actions\StartAction;
 use DigitalStars\SimpleVK\ApiClient;
 use DigitalStars\SimpleVK\Config\ClientConfig;
 use DigitalStars\SimpleVK\Dispatcher\ArgumentResolver;
@@ -14,6 +11,9 @@ use DigitalStars\SimpleVK\Dispatcher\Context;
 use DigitalStars\SimpleVK\Dispatcher\EventDispatcher;
 use DigitalStars\SimpleVK\Message\Keyboard;
 use DigitalStars\SimpleVK\Service\ErrorReporter;
+use DigitalStars\SimpleVK\Tests\tmp_actions\CatchAllAction;
+use DigitalStars\SimpleVK\Tests\tmp_actions\PingBtn;
+use DigitalStars\SimpleVK\Tests\tmp_actions\StartAction;
 use DigitalStars\SimpleVK\Transport\FakeTransport;
 use DigitalStars\SimpleVK\WebhookHandler;
 use PHPUnit\Framework\TestCase;

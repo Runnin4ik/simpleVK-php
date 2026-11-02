@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace DigitalStars\SimpleVK\Dispatcher;
 
 use DigitalStars\SimpleVK\ApiClient;
+use DigitalStars\SimpleVK\Message\IncomingMessage;
 use DigitalStars\SimpleVK\Message\OutgoingMessage;
 use ReflectionClass;
 use RuntimeException;
@@ -122,6 +123,45 @@ class Context
         }
 
         return null;
+    }
+
+    /**
+     * Входящее сообщение как типизированный объект (только для message-событий).
+     */
+    public function incoming(): ?IncomingMessage
+    {
+        return $this->event instanceof IncomingMessage ? $this->event : null;
+    }
+
+    /**
+     * Ответ на входящее сообщение — отправляет сразу, как v3 `$ctx->reply()`.
+     *
+     * Возвращает conversation_message_id первого отправленного сообщения
+     * (или null), поэтому существующий код `$ctx->reply('текст');` работает
+     * без `->send()`. Для цепочки с клавиатурой есть replyMessage().
+     */
+    public function reply(string $text = ''): ?int
+    {
+        $ids = $this->replyMessage($text)->send();
+
+        return $ids[0] ?? null;
+    }
+
+    /**
+     * Конструктор ответа на входящее сообщение без немедленной отправки.
+     *
+     * Для сообщений ставит reply_to на исходное; для callback и прочих
+     * событий вырождается в обычное сообщение в тот же peer.
+     */
+    public function replyMessage(string $text = ''): OutgoingMessage
+    {
+        $incoming = $this->incoming();
+
+        if ($incoming !== null) {
+            return $incoming->reply($text);
+        }
+
+        return $this->msg($text);
     }
 
     /**

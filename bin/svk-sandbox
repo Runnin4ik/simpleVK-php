@@ -1,0 +1,202 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use DigitalStars\SimpleVK\Dispatcher\DispatchResult;
+use DigitalStars\SimpleVK\Testing\Sandbox;
+use DigitalStars\SimpleVK\Testing\TestData;
+
+/**
+ * Оффлайн-песочница SimpleVK: прогоняет подготовленный апдейт через реальный
+ * диспетчер и печатает, что бот «отправил» (FakeTransport), без единого
+ * запроса к VK API.
+ *
+ * Примеры:
+ *   svk-sandbox --actions=./src/Bot --text="/start" --from=123
+ *   svk-sandbox --actions=./src/Bot --click=PingBtn --payload='{"extra":"x"}'
+ *   svk-sandbox --actions=./src/Bot --json=update.json
+ *   echo '{"type":"message_new",...}' | svk-sandbox --actions=./src/Bot --stdin
+ *   svk-sandbox --actions=./src/Bot --repl          # интерактивно: строка → ответ
+ *
+ * Через --bootstrap=file.php можно передать файл, возвращающий массив:
+ *   ['actionsPaths' => ['/abs/path/actions'], 'container' => $psr11Container]
+ */
+
+require __DIR__ . '/../vendor/autoload.php';
+
+/** @param list<string> $argv */
+function parseArgs(array $argv): array
+{
+    $args = [
+        'actions' => [],
+        'bootstrap' => null,
+        'text' => null,
+        'click' => null,
+        'payload' => [],
+        'from' => 1,
+        'peer' => null,
+        'json' => null,
+        'stdin' => false,
+        'repl' => false,
+        'debug' => false,
+        'verbose' => false,
+        'help' => false,
+    ];
+
+    foreach (\array_slice($argv, 1) as $arg) {
+        if (\str_starts_with($arg, '--actions=')) {
+            $args['actions'] = \array_values(\array_filter(\explode(',', \substr($arg, 10))));
+        } elseif (\str_starts_with($arg, '--bootstrap=')) {
+            $args['bootstrap'] = \substr($arg, 12);
+        } elseif (\str_starts_with($arg, '--text=')) {
+            $args['text'] = \substr($arg, 7);
+        } elseif (\str_starts_with($arg, '--click=')) {
+            $args['click'] = \substr($arg, 8);
+        } elseif (\str_starts_with($arg, '--payload=')) {
+            $args['payload'] = \json_decode(\substr($arg, 10), true, flags: \JSON_THROW_ON_ERROR);
+        } elseif (\str_starts_with($arg, '--from=')) {
+            $args['from'] = (int) \substr($arg, 7);
+        } elseif (\str_starts_with($arg, '--peer=')) {
+            $args['peer'] = (int) \substr($arg, 7);
+        } elseif (\str_starts_with($arg, '--json=')) {
+            $args['json'] = \substr($arg, 7);
+        } elseif ($arg === '--stdin') {
+            $args['stdin'] = true;
+        } elseif ($arg === '--repl') {
+            $args['repl'] = true;
+        } elseif ($arg === '--debug') {
+            $args['debug'] = true;
+        } elseif ($arg === '--verbose' || $arg === '-v') {
+            $args['verbose'] = true;
+        } elseif ($arg === '--help' || $arg === '-h') {
+            $args['help'] = true;
+        }
+    }
+
+    return $args;
+}
+
+/** @param DispatchResult $result */
+function printResult(DispatchResult $result, bool $verbose): void
+{
+    \printf("action: %s\n", $result->actionClass ?? '— (маршрут не найден)');
+    \printf(
+        "event:  %s → user=%s peer=%s text=%s\n",
+        $result->eventType?->value ?? '—',
+        $result->userId ?? '—',
+        $result->peerId ?? '—',
+        $result->text === null || $result->text === '' ? '—' : $result->text,
+    );
+    \printf("time:   %.2f ms\n", $result->durationMs);
+
+    if ($result->error !== null) {
+        \printf("error:  %s: %s\n", $result->error::class, $result->error->getMessage());
+    }
+
+    if ($result->outbox === []) {
+        echo "outbox: пусто (бот ничего не отправил)\n";
+
+        return;
+    }
+
+    echo "outbox:\n";
+    foreach ($result->outbox as $index => $call) {
+        \printf("  [%d] %s\n", $index + 1, $call['method']);
+        foreach ($call['params'] as $key => $value) {
+            // токен и версия API — служебные, не показываем (и не светим секреты)
+            if (\in_array($key, ['access_token', 'v'], true)) {
+                continue;
+            }
+
+            if (!\is_string($value) && !\is_scalar($value)) {
+                $value = \json_encode($value, \JSON_UNESCAPED_UNICODE);
+            }
+            $text = (string) $value;
+            if ($key === 'keyboard' || $key === 'template') {
+                $text = '(json, ' . \strlen($text) . ' байт)';
+            } elseif (\mb_strlen($text) > 160) {
+                $text = \mb_substr($text, 0, 157) . '…';
+            }
+            \printf("      %s = %s\n", $key, $text);
+        }
+    }
+
+    if ($verbose) {
+        \var_export($result->payload);
+    }
+}
+
+$args = parseArgs($argv);
+
+if ($args['help']) {
+    \fwrite(STDOUT, "SimpleVK offline sandbox. См. комментарии в bin/svk-sandbox.\n");
+
+    exit(0);
+}
+
+$actionsPaths = $args['actions'];
+$container = null;
+
+if ($args['bootstrap'] !== null) {
+    /** @var array{actionsPaths?: list<string>, container?: object|null} $bootstrap */
+    $bootstrap = require $args['bootstrap'];
+    $actionsPaths = \array_merge($actionsPaths, $bootstrap['actionsPaths'] ?? []);
+    $container = $bootstrap['container'] ?? null;
+}
+
+if ($actionsPaths === []) {
+    \fwrite(STDERR, "Нужен --actions=каталог[,каталог] или --bootstrap=file.php\n");
+    exit(1);
+}
+
+$sandbox = Sandbox::create($actionsPaths, container: $container, debug: $args['debug']);
+
+if ($args['repl']) {
+    echo "REPL: введите текст команды (Ctrl+D — выход). Начинается с '/' — команда бота.\n";
+
+    while (($line = \fgets(STDIN)) !== false) {
+        $text = \trim($line);
+        if ($text === '') {
+            continue;
+        }
+
+        printResult($sandbox->say($text, from: $args['from'], peer: $args['peer']), $args['verbose']);
+        echo "---\n";
+    }
+
+    exit(0);
+}
+
+if ($args['json'] !== null) {
+    $json = (string) \file_get_contents($args['json']);
+    printResult($sandbox->dispatchJson($json), $args['verbose']);
+
+    exit(0);
+}
+
+if ($args['stdin'] || $args['text'] === null && $args['click'] === null) {
+    $raw = \stream_get_contents(STDIN);
+    if (\trim((string) $raw) === '') {
+        \fwrite(STDERR, "Пусто: задайте --text/--click или передайте JSON через stdin.\n");
+        exit(1);
+    }
+
+    printResult($sandbox->dispatchJson((string) $raw), $args['verbose']);
+
+    exit(0);
+}
+
+if ($args['click'] !== null) {
+    $result = $sandbox->dispatch(TestData::callback(
+        $args['click'],
+        $args['payload'],
+        from: $args['from'],
+        peer: $args['peer'],
+    ));
+} else {
+    $result = $sandbox->say((string) $args['text'], from: $args['from'], peer: $args['peer']);
+}
+
+printResult($result, $args['verbose']);
+exit($result->error === null ? 0 : 2);

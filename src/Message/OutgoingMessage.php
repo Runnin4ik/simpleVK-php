@@ -83,6 +83,29 @@ final class OutgoingMessage
         return $this;
     }
 
+    /**
+     * BC-совместимый шорткат v3: ->kbd($rows, $inline, $oneTime).
+     *
+     * Принимает как готовый Keyboard, так и массив строк экземпляров кнопок
+     * (BaseButton или Message\Button) — второй случай оборачивается в Keyboard.
+     *
+     * @param array<list<mixed>>|Keyboard $kbd
+     */
+    public function kbd(array|Keyboard $kbd, bool $inline = false, bool $oneTime = false): self
+    {
+        $keyboard = $kbd instanceof Keyboard ? $kbd : Keyboard::fromButtons($kbd);
+
+        if ($inline) {
+            $keyboard = $keyboard->inline();
+        }
+
+        if ($oneTime) {
+            $keyboard = $keyboard->oneTime();
+        }
+
+        return $this->keyboard($keyboard);
+    }
+
     public function carousel(Carousel $carousel): self
     {
         $this->carousel = $carousel;

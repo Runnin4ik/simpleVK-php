@@ -38,6 +38,14 @@ final class ApiClient
     }
 
     /**
+     * Транспорт клиента (нужен тестам/песочнице: FakeTransport пишет вызовы).
+     */
+    public function transport(): Transport
+    {
+        return $this->transport;
+    }
+
+    /**
      * Синхронный вызов метода VK API.
      *
      * @param array<string, mixed> $params

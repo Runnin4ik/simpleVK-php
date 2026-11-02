@@ -195,9 +195,6 @@ final class DispatcherInternalsTest extends TestCase
             \DigitalStars\SimpleVK\Tests\tmp_actions\PingBtn::class,
             $debug['routes']['payload']['PingBtn'],
         );
-        self::assertSame(
-            \DigitalStars\SimpleVK\Tests\tmp_actions\CatchAllAction::class,
-            $debug['routes']['fallback'],
-        );
+        self::assertSame(\DigitalStars\SimpleVK\Tests\tmp_actions\CatchAllAction::class, $debug['routes']['fallback']);
     }
 }
