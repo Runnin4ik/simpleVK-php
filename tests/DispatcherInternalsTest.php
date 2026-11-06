@@ -133,9 +133,7 @@ final class DispatcherInternalsTest extends TestCase
             }
         };
 
-        $reporter = new \DigitalStars\SimpleVK\Service\ErrorReporter($logger)->withTracePathFilter(
-            'DispatcherInternalsTest',
-        );
+        $reporter = new \DigitalStars\SimpleVK\Service\ErrorReporter($logger)->shortTrace();
 
         $wrapped = $reporter->middleware();
         $handler = $wrapped(static function (): void {

@@ -55,8 +55,8 @@ final class ErrorFormatter
 
         // Контекст в v3-формат не входил; оставляем его только в PSR-3
         // контексте ErrorReporter, чтобы визуально не отличаться от v3.
-        $plain = $this->render($e, $frames, false, false);
-        $console = $this->render($e, $frames, true, false);
+        $plain = $this->render($e, $frames, false, true);
+        $console = $this->render($e, $frames, true, true);
         $vk = $this->render($e, $frames, false, true);
 
         return new ErrorReport(
@@ -73,14 +73,16 @@ final class ErrorFormatter
     private function frames(\Throwable $e): array
     {
         $raw = [[
+            'num' => 1,
             'file' => $e->getFile(),
             'line' => $e->getLine(),
             'class' => '',
             'function' => '{main}',
         ]];
 
-        foreach ($e->getTrace() as $frame) {
+        foreach ($e->getTrace() as $index => $frame) {
             $raw[] = [
+                'num' => $index + 2,
                 'file' => isset($frame['file']) ? (string) $frame['file'] : null,
                 'line' => isset($frame['line']) ? (int) $frame['line'] : null,
                 'class' => isset($frame['class']) ? (string) $frame['class'] : '',
@@ -110,6 +112,7 @@ final class ErrorFormatter
             $result !== []
                 ? $result
                 : [[
+                    'num' => 1,
                     'file' => $e->getFile(),
                     'line' => $e->getLine(),
                     'class' => '',
@@ -133,7 +136,7 @@ final class ErrorFormatter
     }
 
     /**
-     * @param list<array{file: ?string, line: ?int, class: string, function: string, internal: bool, user: bool}> $frames
+     * @param list<array{num: int, file: ?string, line: ?int, class: string, function: string, internal: bool, user: bool}> $frames
      */
     private function render(\Throwable $e, array $frames, bool $color, bool $shortenPaths): string
     {
@@ -146,7 +149,7 @@ final class ErrorFormatter
                 $call = $this->callName($frame);
 
                 $trace .=
-                    $this->log('#' . ($index + 1) . ' ', 'green', $color)
+                    $this->log('#' . $frame['num'] . ' ', 'green', $color)
                     . $this->log('[internal function]', 'blue', $color)
                     . "\n"
                     . $this->log('?: ', 'yellow', $color)
@@ -159,7 +162,7 @@ final class ErrorFormatter
             $path = $this->path($frame['file'], $shortenPaths);
             $marker = $frame['user'] ? '➡ ' : '';
             $trace .=
-                $this->log("{$marker}#" . ($index + 1) . ' ', 'green', $color)
+                $this->log("{$marker}#" . $frame['num'] . ' ', 'green', $color)
                 . $this->log($path, 'blue', $color)
                 . $this->log(':' . ($frame['line'] ?? '?'), 'yellow', $color)
                 . "\n";
