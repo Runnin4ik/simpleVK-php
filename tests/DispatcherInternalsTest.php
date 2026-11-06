@@ -146,7 +146,7 @@ final class DispatcherInternalsTest extends TestCase
         $handler();
 
         self::assertCount(1, $logger->messages);
-        self::assertStringContainsString('DomainException: inside handler', $logger->messages[0]);
+        self::assertStringContainsString('‼Fatal Error: inside handler', $logger->messages[0]);
         self::assertStringContainsString('DispatcherInternalsTest.php', $logger->messages[0]);
     }
 

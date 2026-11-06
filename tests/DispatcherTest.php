@@ -228,12 +228,12 @@ final class DispatcherTest extends TestCase
 
         // В лог попало компактное сообщение
         self::assertNotEmpty($logger->messages);
-        self::assertStringContainsString('RuntimeException: boom', $logger->messages[0]);
+        self::assertStringContainsString('‼Fatal Error: boom', $logger->messages[0]);
         self::assertStringContainsString('DispatcherTest.php', $logger->messages[0]);
 
         // Уведомление ушло разработчику
         self::assertArrayHasKey(111, $sentTo);
-        self::assertStringContainsString('TowerGame', $sentTo[111][0]);
+        self::assertStringStartsWith('‼Fatal Error: boom', $sentTo[111][0]);
     }
 
     /**

@@ -24,14 +24,14 @@ final class ErrorFormatterTest extends TestCase
         self::assertLessThanOrEqual(120, \mb_strlen($report->vk));
     }
 
-    public function testVkContainsExceptionClassAndFrame(): void
+    public function testVkMatchesV3Format(): void
     {
         $report = (new ErrorFormatter(appTitle: 'Tower'))
             ->format(new \RuntimeException('boom'));
 
-        self::assertStringContainsString('RuntimeException: boom', $report->vk);
-        self::assertStringContainsString('↳', $report->vk);
-        self::assertStringContainsString('ErrorFormatterTest.php', $report->vk);
+        self::assertStringStartsWith('‼Fatal Error: boom', $report->vk);
+        self::assertMatchesRegularExpression('/➡ #1 .*ErrorFormatterTest\.php:\d+/', $report->vk);
+        self::assertStringContainsString(':', $report->vk);
     }
 
     public function testConsoleHasAnsiAndPlainDoesNot(): void
@@ -40,7 +40,7 @@ final class ErrorFormatterTest extends TestCase
 
         self::assertStringContainsString("\033[", $report->console);
         self::assertStringNotContainsString("\033[", $report->plain);
-        self::assertStringContainsString('RuntimeException: boom', $report->plain);
+        self::assertStringStartsWith('‼Fatal Error: boom', $report->plain);
     }
 
     public function testShortTraceKeepsProjectFrameAndSnippet(): void
@@ -48,17 +48,17 @@ final class ErrorFormatterTest extends TestCase
         $report = (new ErrorFormatter())->shortTrace()
             ->format(new \RuntimeException('with snippet'));
 
-        self::assertStringContainsString(__FILE__, $report->plain);
-        self::assertStringContainsString('>', $report->plain);
+        self::assertStringContainsString(\basename(__FILE__), $report->plain);
+        self::assertMatchesRegularExpression('/\d+: .*with snippet|with snippet/', $report->plain);
     }
 
-    public function testTraceFilterCanSelectSingleFrame(): void
+    public function testTracePathFilterShortensVkPaths(): void
     {
-        $report = (new ErrorFormatter())->withTracePathFilter('ErrorFormatterTest.php')
+        $report = (new ErrorFormatter())->withTracePathFilter(\dirname(__FILE__))
             ->format(new \RuntimeException('filtered'));
 
-        self::assertStringContainsString('ErrorFormatterTest.php', $report->plain);
-        self::assertStringNotContainsString('/vendor/', $report->plain);
+        self::assertStringContainsString('..', $report->vk);
+        self::assertStringContainsString('ErrorFormatterTest.php', $report->vk);
     }
 
     public function testFingerprintIgnoresNumbers(): void

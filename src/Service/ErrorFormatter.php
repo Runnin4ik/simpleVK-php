@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace DigitalStars\SimpleVK\Service;
 
 /**
- * Превращает Throwable в три представления без глобального состояния:
- * console (ANSI), plain (для логов) и короткий текст для VK.
+ * Форматтер в стиле v3 ErrorHandler: FATAL-заголовок, кадры с номерами,
+ * маркером ➡ для пользовательских файлов и строкой кода из источника.
  *
- * В отличие от v3-хендлера, здесь нет set_error_handler/ini_set/exit и
- * отправки сообщений: только форматирование, которое можно использовать
- * из любого места и скомпоновать с Monolog/Sentry.
+ * Без глобального состояния и без побочных эффектов: только строки для
+ * консоли, лога и VK. Цвета включаются отдельно, поэтому один и тот же
+ * результат можно писать в терминал и в journald.
  */
 final class ErrorFormatter
 {
@@ -21,24 +21,29 @@ final class ErrorFormatter
 
     public function __construct(
         private readonly string $appTitle = 'App',
-        private readonly int $maxFrames = 6,
-        private readonly int $snippetRadius = 1,
-        private readonly int $maxVkLength = 3500,
+        private readonly int $maxFrames = 50,
+        private readonly int $snippetPadding = 0,
+        private readonly int $maxVkLength = 0,
         private readonly ?string $basePath = null,
     ) {}
 
     /**
-     * Оставлять только кадры, содержащие одну из подстрок (как v3).
+     * Пути, которые в trace заменяются на `..` (как v3 setTracePathFilter).
      */
     public function withTracePathFilter(string ...$substrings): self
     {
         $clone = clone $this;
-        $clone->tracePathFilters = \array_values(\array_filter($substrings, static fn(string $s): bool => $s !== ''));
-        $clone->shortTrace = true;
+        $clone->tracePathFilters = \array_values(\array_filter(
+            $substrings,
+            static fn(string $s): bool => $s !== '',
+        ));
 
         return $clone;
     }
 
+    /**
+     * Скрыть vendor/внутренние кадры, как v3 shortTrace().
+     */
     public function shortTrace(): self
     {
         $clone = clone $this;
@@ -50,15 +55,23 @@ final class ErrorFormatter
     public function format(\Throwable $e, string $context = ''): ErrorReport
     {
         $frames = $this->frames($e);
-        $plain = $this->render($e, $frames, $context, false);
-        $console = $this->render($e, $frames, $context, true);
-        $vk = $this->renderVk($e, $frames, $context);
 
-        return new ErrorReport(plain: $plain, console: $console, vk: $vk, fingerprint: $this->fingerprint($e));
+        // Контекст в v3-формат не входил; оставляем его только в PSR-3
+        // контексте ErrorReporter, чтобы визуально не отличаться от v3.
+        $plain = $this->render($e, $frames, false, false);
+        $console = $this->render($e, $frames, true, false);
+        $vk = $this->render($e, $frames, false, true);
+
+        return new ErrorReport(
+            plain: $plain,
+            console: $console,
+            vk: $this->truncate($vk),
+            fingerprint: $this->fingerprint($e),
+        );
     }
 
     /**
-     * @return list<array{file: ?string, line: ?int, class: string, function: string, first: bool}>
+     * @return list<array{file: ?string, line: ?int, class: string, function: string, internal: bool, user: bool}>
      */
     private function frames(\Throwable $e): array
     {
@@ -78,62 +91,34 @@ final class ErrorFormatter
             ];
         }
 
-        $filtered = $this->filterFrames($raw);
         $result = [];
-        $seen = [];
+        foreach ($raw as $frame) {
+            $internal = $frame['file'] === null;
+            $user = !$internal && !$this->isInternalPath($frame['file']);
 
-        foreach ($filtered as $index => $frame) {
-            $key = ($frame['file'] ?? '?') . ':' . ($frame['line'] ?? '?');
-            if (isset($seen[$key])) {
+            if ($this->shortTrace && !$internal && !$user) {
                 continue;
             }
 
-            $seen[$key] = true;
-            $result[] = $frame + ['first' => $index === 0];
+            if ($this->shortTrace && $internal) {
+                continue;
+            }
+
+            $result[] = $frame + ['internal' => $internal, 'user' => $user];
 
             if (\count($result) >= $this->maxFrames) {
                 break;
             }
         }
 
-        return $result;
-    }
-
-    /**
-     * @param list<array{file: ?string, line: ?int, class: string, function: string}> $raw
-     *
-     * @return list<array{file: ?string, line: ?int, class: string, function: string}>
-     */
-    private function filterFrames(array $raw): array
-    {
-        if ($this->tracePathFilters !== []) {
-            $matched = \array_values(\array_filter($raw, fn(array $frame): bool => $this->matchesFilter(
-                $frame['file'],
-            )));
-
-            return $matched !== [] ? $matched : [$raw[0]];
-        }
-
-        $user = \array_values(\array_filter($raw, fn(array $frame): bool => !$this->isInternalPath($frame['file'])));
-
-        return $user !== [] ? $user : [$raw[0]];
-    }
-
-    private function matchesFilter(?string $file): bool
-    {
-        if ($file === null || $this->tracePathFilters === []) {
-            return false;
-        }
-
-        $normalized = \str_replace('\\', '/', $file);
-
-        foreach ($this->tracePathFilters as $filter) {
-            if (\str_contains($normalized, \str_replace('\\', '/', $filter))) {
-                return true;
-            }
-        }
-
-        return false;
+        return $result !== [] ? $result : [[
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+            'class' => '',
+            'function' => '{main}',
+            'internal' => false,
+            'user' => true,
+        ]];
     }
 
     private function isInternalPath(?string $file): bool
@@ -145,104 +130,71 @@ final class ErrorFormatter
         $normalized = \str_replace('\\', '/', $file);
         $libraryRoot = \str_replace('\\', '/', \dirname(__DIR__, 2));
 
-        return \str_contains($normalized, '/vendor/') || \str_starts_with($normalized, $libraryRoot . '/src/');
+        return \str_contains($normalized, '/vendor/')
+            || \str_starts_with($normalized, $libraryRoot . '/src/');
     }
 
     /**
-     * @param list<array{file: ?string, line: ?int, class: string, function: string, first: bool}> $frames
+     * @param list<array{file: ?string, line: ?int, class: string, function: string, internal: bool, user: bool}> $frames
      */
-    private function render(\Throwable $e, array $frames, string $context, bool $color): string
+    private function render(\Throwable $e, array $frames, bool $color, bool $shortenPaths): string
     {
-        $message = $this->redact($e->getMessage());
-        $header = \sprintf('%s: %s', $e::class, $message);
-        if ($context !== '') {
-            $header .= " [{$context}]";
-        }
+        $header = $this->formatErrorLevel($e, $color);
+        $header .= $this->redact($e->getMessage());
 
-        $lines = [
-            $color ? $this->colored('‼ ' . $header, 'red') : '‼ ' . $header,
-        ];
+        $trace = '';
+        foreach ($frames as $index => $frame) {
+            if ($frame['internal']) {
+                $call = $frame['class'] !== ''
+                    ? "{$frame['class']}->{$frame['function']}()"
+                    : "{$frame['function']}()";
 
-        foreach ($frames as $frame) {
-            $location = $this->location($frame['file'], $frame['line']);
-            $call = $frame['class'] !== '' ? "{$frame['class']}->{$frame['function']}()" : "{$frame['function']}()";
+                $trace .= $this->log("#" . ($index + 1) . ' ', 'green', $color)
+                    . $this->log('[internal function]', 'blue', $color) . "\n"
+                    . $this->log('?: ', 'yellow', $color)
+                    . $this->log($call, 'white', $color) . "\n\n";
 
-            $lines[] = $color
-                ? $this->colored('  ↳ ', 'green') . $this->colored($location, 'blue') . ' ' . $call
-                : "  ↳ {$location} {$call}";
-
-            if ($this->snippetRadius > 0) {
-                $snippet = $this->snippet($frame['file'], $frame['line'], $color);
-                if ($snippet !== '') {
-                    $lines[] = $snippet;
-                }
+                continue;
             }
+
+            $path = $this->path($frame['file'], $shortenPaths);
+            $marker = $frame['user'] ? '➡ ' : '';
+            $trace .= $this->log("{$marker}#" . ($index + 1) . ' ', 'green', $color)
+                . $this->log($path, 'blue', $color)
+                . $this->log(':' . ($frame['line'] ?? '?'), 'yellow', $color) . "\n";
+
+            $snippet = $this->snippet($frame['file'], $frame['line'], $color);
+            $trace .= $snippet !== ''
+                ? $this->log($snippet, 'white', $color) . "\n"
+                : "\n";
         }
 
         if ($e->getPrevious() instanceof \Throwable) {
             $prev = $e->getPrevious();
-            $lines[] = \sprintf(
-                '  ⬑ предыдущее: %s (%s)',
-                $this->redact($prev->getMessage()),
-                $this->location($prev->getFile(), $prev->getLine()),
-            );
+            $trace .= $this->log('⬑ предыдущее: ', 'yellow', $color)
+                . $this->redact($prev->getMessage())
+                . ' (' . $this->path($prev->getFile(), $shortenPaths)
+                . ':' . $prev->getLine() . ")\n";
         }
 
-        return \implode("\n", $lines);
+        return $header . "\n\n" . $trace;
     }
 
-    /**
-     * @param list<array{file: ?string, line: ?int, class: string, function: string, first: bool}> $frames
-     */
-    private function renderVk(\Throwable $e, array $frames, string $context): string
+    private function path(?string $file, bool $shortenPaths): string
     {
-        $place = $frames[0]['file'] ?? $e->getFile();
-        $line = $frames[0]['line'] ?? $e->getLine();
-
-        $lines = [
-            \sprintf('⚠️ %s: ошибка%s', $this->appTitle, $context !== '' ? " [{$context}]" : ''),
-            \sprintf('‼ %s: %s', $e::class, $this->redact($e->getMessage())),
-        ];
-
-        foreach (\array_slice($frames, 0, 3) as $frame) {
-            $location = $this->location($frame['file'], $frame['line']);
-            $call = $frame['class'] !== '' ? "{$frame['class']}->{$frame['function']}()" : "{$frame['function']}()";
-
-            $lines[] = "  ↳ {$location} {$call}";
+        if ($file === null) {
+            return '?';
         }
 
-        if ($this->snippetRadius > 0 && isset($frames[0])) {
-            $snippet = $this->snippet($frames[0]['file'], $frames[0]['line'], false);
-            if ($snippet !== '') {
-                $lines[] = $snippet;
+        $path = \str_replace('\\', '/', $file);
+
+        if ($shortenPaths) {
+            foreach ($this->tracePathFilters as $filter) {
+                $path = \str_replace($filter, '..', $path);
             }
         }
 
-        if ($e->getPrevious() instanceof \Throwable) {
-            $lines[] = \sprintf(
-                '  ⬑ предыдущее: %s (%s)',
-                $this->redact($e->getPrevious()->getMessage()),
-                $this->location($e->getPrevious()->getFile(), $e->getPrevious()->getLine()),
-            );
-        }
-
-        $lines[] = '📍 ' . $this->location($place, $line);
-
-        return $this->truncate(\implode("\n", $lines), $this->maxVkLength);
-    }
-
-    private function location(?string $file, ?int $line): string
-    {
-        if ($file === null) {
-            return '[internal]';
-        }
-
-        $path = $file;
-        if ($this->basePath !== null && $this->basePath !== '') {
-            $path = \str_replace(\str_replace('\\', '/', $this->basePath), '.', \str_replace('\\', '/', $path));
-        }
-
-        return $line !== null ? "{$path}:{$line}" : $path;
+        return $path;
     }
 
     private function snippet(?string $file, ?int $line, bool $color): string
@@ -252,7 +204,7 @@ final class ErrorFormatter
         }
 
         $size = @\filesize($file);
-        if ($size === false || $size > (512 * 1024)) {
+        if ($size === false || $size > 512 * 1024) {
             return '';
         }
 
@@ -261,22 +213,79 @@ final class ErrorFormatter
             return '';
         }
 
-        $start = \max(0, $line - $this->snippetRadius - 1);
-        $end = \min(\count($source), $line + $this->snippetRadius);
+        $start = \max(0, $line - $this->snippetPadding - 1);
+        $end = \min(\count($source), $line + $this->snippetPadding);
 
-        $lines = [];
+        $parts = [];
         for ($i = $start; $i < $end; $i++) {
-            $number = $i + 1;
-            $code = $this->stripAnsi($source[$i]);
-            $prefix = $number === $line ? '>' : ' ';
-            $lineText = \sprintf('%s %4d | %s', $prefix, $number, $code);
+            $number = ($i + 1) . ': ';
+            $code = \trim($this->stripAnsi($source[$i]));
 
-            $lines[] = $number === $line
-                ? ($color ? $this->colored($lineText, 'yellow') : $lineText)
-                : ($color ? $this->colored($lineText, 'gray') : $lineText);
+            $parts[] = $color
+                ? $this->log($number, 'yellow', true) . $this->log($code, 'white', true)
+                : $number . $code;
         }
 
-        return \implode("\n", $lines);
+        return $parts !== [] ? \implode(\PHP_EOL, $parts) . \PHP_EOL : '';
+    }
+
+    private function formatErrorLevel(\Throwable $e, bool $color): string
+    {
+        $type = $e instanceof \ErrorException ? $e->getSeverity() : \E_ERROR;
+
+        [$level] = [
+            \E_ERROR => ['CRITICAL'],
+            \E_WARNING => ['WARNING'],
+            \E_PARSE => ['ERROR'],
+            \E_NOTICE => ['NOTICE'],
+            \E_CORE_ERROR => ['CRITICAL'],
+            \E_CORE_WARNING => ['WARNING'],
+            \E_COMPILE_ERROR => ['CRITICAL'],
+            \E_COMPILE_WARNING => ['WARNING'],
+            \E_USER_ERROR => ['ERROR'],
+            \E_USER_WARNING => ['WARNING'],
+            \E_USER_NOTICE => ['NOTICE'],
+            \E_RECOVERABLE_ERROR => ['ERROR'],
+            \E_DEPRECATED => ['NOTICE'],
+            \E_USER_DEPRECATED => ['NOTICE'],
+        ][$type] ?? ['UNKNOWN'];
+
+        $text = match ($level) {
+            'ERROR', 'CRITICAL' => '‼Fatal Error: ',
+            'WARNING' => '⚠️Warning: ',
+            'NOTICE' => '⚠️Notice: ',
+            default => '‼Unknown Error: ',
+        };
+
+        if (!$color) {
+            return $text;
+        }
+
+        $colorCode = match ($level) {
+            'ERROR', 'CRITICAL' => 'red',
+            'WARNING' => 'yellow',
+            'NOTICE' => 'blue',
+            default => 'red',
+        };
+
+        return $this->log($text, $colorCode, true);
+    }
+
+    private function log(string $text, string $color, bool $enabled): string
+    {
+        if (!$enabled) {
+            return $text;
+        }
+
+        $codes = [
+            'red' => "\033[31m",
+            'green' => "\033[32m",
+            'yellow' => "\033[33m",
+            'blue' => "\033[34m",
+            'white' => "\033[37m",
+        ];
+
+        return ($codes[$color] ?? '') . $text . "\033[0m";
     }
 
     private function redact(string $text): string
@@ -296,13 +305,13 @@ final class ErrorFormatter
         return $text;
     }
 
-    private function truncate(string $text, int $limit): string
+    private function truncate(string $text): string
     {
-        if (\mb_strlen($text) <= $limit) {
+        if ($this->maxVkLength <= 0 || \mb_strlen($text) <= $this->maxVkLength) {
             return $text;
         }
 
-        return \mb_substr($text, 0, \max(0, $limit - 1)) . '…';
+        return \mb_substr($text, 0, \max(0, $this->maxVkLength - 1)) . '…';
     }
 
     private function fingerprint(\Throwable $e): string
@@ -310,19 +319,6 @@ final class ErrorFormatter
         $message = \preg_replace('/\d+/', '#', $e->getMessage()) ?? $e->getMessage();
 
         return \sha1($e::class . '|' . $message . '|' . $e->getFile() . ':' . $e->getLine());
-    }
-
-    private function colored(string $text, string $color): string
-    {
-        $codes = [
-            'red' => "\033[31m",
-            'green' => "\033[32m",
-            'yellow' => "\033[33m",
-            'blue' => "\033[34m",
-            'gray' => "\033[90m",
-        ];
-
-        return ($codes[$color] ?? '') . $text . "\033[0m";
     }
 
     private function stripAnsi(string $text): string
