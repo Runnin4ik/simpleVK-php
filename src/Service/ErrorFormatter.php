@@ -211,6 +211,13 @@ final class ErrorFormatter
             $lines[] = "  ↳ {$location} {$call}";
         }
 
+        if ($this->snippetRadius > 0 && isset($frames[0])) {
+            $snippet = $this->snippet($frames[0]['file'], $frames[0]['line'], false);
+            if ($snippet !== '') {
+                $lines[] = $snippet;
+            }
+        }
+
         if ($e->getPrevious() instanceof \Throwable) {
             $lines[] = \sprintf(
                 '  ⬑ предыдущее: %s (%s)',
