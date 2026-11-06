@@ -200,7 +200,7 @@ final class ErrorFormatter
 
         if ($shortenPaths) {
             foreach ($this->tracePathFilters as $filter) {
-                $path = \str_replace($filter, '..', $path);
+                $path = \str_replace(\str_replace('\\', '/', $filter), '..', $path);
             }
         }
 
