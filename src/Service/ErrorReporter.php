@@ -7,28 +7,37 @@ namespace DigitalStars\SimpleVK\Service;
 use Psr\Log\LoggerInterface;
 
 /**
- * Компактный отчёт об ошибках: разворачивает Throwable в короткое сообщение
- * с указанием строк кода проекта (фильтр путей), уведомляет разработчика
- * в VK и/или пишет в PSR-3 логгер.
+ * Компактный отчёт об ошибках: разворачивает Throwable в читаемый текст,
+ * пишет его в PSR-3 логгер и при необходимости отправляет короткое
+ * уведомление разработчику в VK.
  *
  * Порт идей v3 (setUserLogError/setTracePathFilter/shortTrace), но без
- * глобального стейта: экземпляр создаётся явно и подключается как middleware.
+ * глобального состояния: экземпляр создаётся явно и подключается как
+ * middleware. Никаких set_error_handler, ini_set, exit и отправки
+ * сообщений из глобального обработчика.
  */
 final class ErrorReporter
 {
-    /** @var list<string> Подстроки: пути, которые попадают в сокращённый trace. */
-    private array $tracePathFilters = [];
+    private ErrorFormatter $formatter;
 
-    private bool $shortTrace = false;
+    private ?float $lastNotifyAt = null;
+
+    private string $lastFingerprint = '';
 
     public function __construct(
         private readonly LoggerInterface $logger,
         /** ID пользователя VK для уведомлений; null — не отправлять. */
         private readonly ?int $notifyVkId = null,
         private readonly ?\Closure $messageSender = null,
-        /** Заголовок приложения для сообщений об ошибках. */
-        private readonly string $appTitle = 'App',
-    ) {}
+        string $appTitle = 'App',
+        ?ErrorFormatter $formatter = null,
+        /** ANSI-цвета в консольном представлении (для stderr/journald лучше false). */
+        private readonly bool $consoleColors = false,
+        /** Не отправлять одинаковую ошибку чаще, чем раз в N секунд. 0 — без лимита. */
+        private readonly int $notifyIntervalSeconds = 60,
+    ) {
+        $this->formatter = $formatter ?? new ErrorFormatter(appTitle: $appTitle);
+    }
 
     /**
      * Показывать в trace только кадры, содержащие данные подстроки.
@@ -36,19 +45,18 @@ final class ErrorReporter
     public function withTracePathFilter(string ...$substrings): self
     {
         $clone = clone $this;
-        $clone->tracePathFilters = \array_values($substrings);
-        $clone->shortTrace = true;
+        $clone->formatter = $this->formatter->withTracePathFilter(...$substrings);
 
         return $clone;
     }
 
     /**
-     * Короткий режим: только файл:строка верхнего кадра.
+     * Короткий режим: только значимые кадры без vendor/библиотеки.
      */
     public function shortTrace(): self
     {
         $clone = clone $this;
-        $clone->shortTrace = true;
+        $clone->formatter = $this->formatter->shortTrace();
 
         return $clone;
     }
@@ -58,20 +66,30 @@ final class ErrorReporter
      */
     public function report(\Throwable $e, string $contextDescription = ''): void
     {
-        $compact = $this->compactMessage($e);
+        $report = $this->formatter->format($e, $contextDescription);
 
-        $this->logger->error($contextDescription !== '' ? "{$contextDescription}: {$compact}" : $compact, [
-            'exception' => $e::class,
+        $this->logger->error($this->consoleColors ? $report->console : $report->plain, [
+            'exception' => $e,
             'code' => $e->getCode(),
             'file' => $e->getFile() . ':' . $e->getLine(),
+            'fingerprint' => $report->fingerprint,
         ]);
 
-        if ($this->notifyVkId !== null && $this->messageSender instanceof \Closure) {
-            try {
-                ($this->messageSender)($this->userMessage($e, $contextDescription), $this->notifyVkId);
-            } catch (\Throwable) {
-                // Уведомление никогда не ломает основной поток.
-            }
+        if ($this->notifyVkId === null || !$this->messageSender instanceof \Closure) {
+            return;
+        }
+
+        if ($this->isDuplicate($report->fingerprint)) {
+            return;
+        }
+
+        try {
+            ($this->messageSender)($report->vk, $this->notifyVkId);
+        } catch (\Throwable $notifyError) {
+            // Ошибка отправки не должна рекурсивно попадать в ErrorReporter.
+            $this->logger->warning('VK error notification failed', [
+                'exception' => $notifyError,
+            ]);
         }
     }
 
@@ -98,79 +116,23 @@ final class ErrorReporter
         };
     }
 
-    /**
-     * Компактное описание ошибки: класс + сообщение + место в коде проекта.
-     */
-    private function compactMessage(\Throwable $e): string
+    private function isDuplicate(string $fingerprint): bool
     {
-        $lines = [
-            \sprintf('💥 %s: %s', $e::class, $e->getMessage()),
-        ];
-
-        foreach ($this->filteredFrames($e) as $frame) {
-            $lines[] = "  ↳ {$frame}";
+        if ($this->notifyIntervalSeconds <= 0) {
+            return false;
         }
 
-        if ($e->getPrevious() instanceof \Throwable) {
-            $prev = $e->getPrevious();
-            $lines[] = \sprintf('⬑ предыдущее: %s (%s:%d)', $prev->getMessage(), $prev->getFile(), $prev->getLine());
+        $now = \microtime(true);
+        if (
+            $fingerprint === $this->lastFingerprint
+            && $this->lastNotifyAt !== null
+            && ($now - $this->lastNotifyAt) < $this->notifyIntervalSeconds
+        ) {
+            return true;
         }
 
-        return \implode("\n", $lines);
-    }
-
-    /**
-     * Сообщение пользователю-разработчику в VK (короче, чем в лог).
-     */
-    private function userMessage(\Throwable $e, string $context): string
-    {
-        $frames = $this->filteredFrames($e);
-        $place = $frames[0] ?? $e->getFile() . ':' . $e->getLine();
-
-        return (
-            "⚠️ {$this->appTitle}: ошибка"
-            . ($context !== '' ? " [{$context}]" : '')
-            . "\n{$e->getMessage()}"
-            . "\n📍 {$place}"
-        );
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function filteredFrames(\Throwable $e): array
-    {
-        $frames = [];
-        $full = [
-            $e->getFile() . ':' . $e->getLine(),
-            ...\array_map(
-                static fn(array $f): string => ($f['file'] ?? '?') . ':' . ($f['line'] ?? '?'),
-                $e->getTrace(),
-            ),
-        ];
-
-        foreach ($full as $frame) {
-            if (!$this->shortTrace || $this->tracePathFilters === []) {
-                $frames[] = $frame;
-            } elseif ($this->matchesFilters($frame)) {
-                $frames[] = $frame;
-            }
-
-            if (\count($frames) >= 3) {
-                break;
-            }
-        }
-
-        return \array_values(\array_unique($frames));
-    }
-
-    private function matchesFilters(string $frame): bool
-    {
-        foreach ($this->tracePathFilters as $filter) {
-            if ($filter !== '' && \str_contains($frame, $filter)) {
-                return true;
-            }
-        }
+        $this->lastFingerprint = $fingerprint;
+        $this->lastNotifyAt = $now;
 
         return false;
     }
