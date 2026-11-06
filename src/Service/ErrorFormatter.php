@@ -94,15 +94,8 @@ final class ErrorFormatter
             $user = !$internal && !$this->isInternalPath($frame['file']);
 
             if ($this->shortTrace) {
-                if (!$internal && !$user) {
+                if ($internal || !$user) {
                     continue;
-                }
-
-                if ($internal) {
-                    $caller = $raw[$i + 1] ?? null;
-                    if ($caller === null || $this->isInternalPath($caller['file'])) {
-                        continue;
-                    }
                 }
             }
 
@@ -150,7 +143,7 @@ final class ErrorFormatter
         $trace = '';
         foreach ($frames as $index => $frame) {
             if ($frame['internal']) {
-                $call = $frame['class'] !== '' ? "{$frame['class']}->{$frame['function']}()" : "{$frame['function']}()";
+                $call = $this->callName($frame);
 
                 $trace .=
                     $this->log('#' . ($index + 1) . ' ', 'green', $color)
@@ -188,6 +181,28 @@ final class ErrorFormatter
         }
 
         return $header . "\n\n" . $trace;
+    }
+
+    /**
+     * Убирает из имён анонимных функций абсолютные пути PHP:
+     * {closure:E:\...\bot.php:73} → {closure}.
+     *
+     * @param array{class: string, function: string} $frame
+     */
+    private function callName(array $frame): string
+    {
+        $function = $frame['function'];
+
+        for ($i = 0; $i < 3; $i++) {
+            $cleaned = \preg_replace('/\{closure:[^}]*\}/', '{closure}', $function);
+            if ($cleaned === null || $cleaned === $function) {
+                break;
+            }
+
+            $function = $cleaned;
+        }
+
+        return ($frame['class'] !== '' ? "{$frame['class']}->" : '') . "{$function}()";
     }
 
     private function path(?string $file, bool $shortenPaths): string
