@@ -33,10 +33,7 @@ final class ErrorFormatter
     public function withTracePathFilter(string ...$substrings): self
     {
         $clone = clone $this;
-        $clone->tracePathFilters = \array_values(\array_filter(
-            $substrings,
-            static fn(string $s): bool => $s !== '',
-        ));
+        $clone->tracePathFilters = \array_values(\array_filter($substrings, static fn(string $s): bool => $s !== ''));
 
         return $clone;
     }
@@ -92,16 +89,21 @@ final class ErrorFormatter
         }
 
         $result = [];
-        foreach ($raw as $frame) {
+        foreach ($raw as $i => $frame) {
             $internal = $frame['file'] === null;
             $user = !$internal && !$this->isInternalPath($frame['file']);
 
-            if ($this->shortTrace && !$internal && !$user) {
-                continue;
-            }
+            if ($this->shortTrace) {
+                if (!$internal && !$user) {
+                    continue;
+                }
 
-            if ($this->shortTrace && $internal) {
-                continue;
+                if ($internal) {
+                    $caller = $raw[$i + 1] ?? null;
+                    if ($caller === null || $this->isInternalPath($caller['file'])) {
+                        continue;
+                    }
+                }
             }
 
             $result[] = $frame + ['internal' => $internal, 'user' => $user];
@@ -111,14 +113,18 @@ final class ErrorFormatter
             }
         }
 
-        return $result !== [] ? $result : [[
-            'file' => $e->getFile(),
-            'line' => $e->getLine(),
-            'class' => '',
-            'function' => '{main}',
-            'internal' => false,
-            'user' => true,
-        ]];
+        return (
+            $result !== []
+                ? $result
+                : [[
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                    'class' => '',
+                    'function' => '{main}',
+                    'internal' => false,
+                    'user' => true,
+                ]]
+        );
     }
 
     private function isInternalPath(?string $file): bool
@@ -130,8 +136,7 @@ final class ErrorFormatter
         $normalized = \str_replace('\\', '/', $file);
         $libraryRoot = \str_replace('\\', '/', \dirname(__DIR__, 2));
 
-        return \str_contains($normalized, '/vendor/')
-            || \str_starts_with($normalized, $libraryRoot . '/src/');
+        return \str_contains($normalized, '/vendor/') || \str_starts_with($normalized, $libraryRoot . '/src/');
     }
 
     /**
@@ -145,36 +150,41 @@ final class ErrorFormatter
         $trace = '';
         foreach ($frames as $index => $frame) {
             if ($frame['internal']) {
-                $call = $frame['class'] !== ''
-                    ? "{$frame['class']}->{$frame['function']}()"
-                    : "{$frame['function']}()";
+                $call = $frame['class'] !== '' ? "{$frame['class']}->{$frame['function']}()" : "{$frame['function']}()";
 
-                $trace .= $this->log("#" . ($index + 1) . ' ', 'green', $color)
-                    . $this->log('[internal function]', 'blue', $color) . "\n"
+                $trace .=
+                    $this->log('#' . ($index + 1) . ' ', 'green', $color)
+                    . $this->log('[internal function]', 'blue', $color)
+                    . "\n"
                     . $this->log('?: ', 'yellow', $color)
-                    . $this->log($call, 'white', $color) . "\n\n";
+                    . $this->log($call, 'white', $color)
+                    . "\n\n";
 
                 continue;
             }
 
             $path = $this->path($frame['file'], $shortenPaths);
             $marker = $frame['user'] ? '➡ ' : '';
-            $trace .= $this->log("{$marker}#" . ($index + 1) . ' ', 'green', $color)
+            $trace .=
+                $this->log("{$marker}#" . ($index + 1) . ' ', 'green', $color)
                 . $this->log($path, 'blue', $color)
-                . $this->log(':' . ($frame['line'] ?? '?'), 'yellow', $color) . "\n";
+                . $this->log(':' . ($frame['line'] ?? '?'), 'yellow', $color)
+                . "\n";
 
             $snippet = $this->snippet($frame['file'], $frame['line'], $color);
-            $trace .= $snippet !== ''
-                ? $this->log($snippet, 'white', $color) . "\n"
-                : "\n";
+            $trace .= $snippet !== '' ? $this->log($snippet, 'white', $color) . "\n" : "\n";
         }
 
         if ($e->getPrevious() instanceof \Throwable) {
             $prev = $e->getPrevious();
-            $trace .= $this->log('⬑ предыдущее: ', 'yellow', $color)
+            $trace .=
+                $this->log('⬑ предыдущее: ', 'yellow', $color)
                 . $this->redact($prev->getMessage())
-                . ' (' . $this->path($prev->getFile(), $shortenPaths)
-                . ':' . $prev->getLine() . ")\n";
+                . ' ('
+                . $this->path($prev->getFile(), $shortenPaths)
+                . ':'
+                . $prev->getLine()
+                . ")\n";
         }
 
         return $header . "\n\n" . $trace;
@@ -204,7 +214,7 @@ final class ErrorFormatter
         }
 
         $size = @\filesize($file);
-        if ($size === false || $size > 512 * 1024) {
+        if ($size === false || $size > (512 * 1024)) {
             return '';
         }
 
