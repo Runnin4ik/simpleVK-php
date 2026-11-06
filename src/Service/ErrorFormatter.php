@@ -199,15 +199,29 @@ final class ErrorFormatter
         $place = $frames[0]['file'] ?? $e->getFile();
         $line = $frames[0]['line'] ?? $e->getLine();
 
-        $text = \sprintf(
-            "⚠️ %s: ошибка%s\n%s\n📍 %s",
-            $this->appTitle,
-            $context !== '' ? " [{$context}]" : '',
-            $this->redact($e->getMessage()),
-            $this->location($place, $line),
-        );
+        $lines = [
+            \sprintf('⚠️ %s: ошибка%s', $this->appTitle, $context !== '' ? " [{$context}]" : ''),
+            \sprintf('‼ %s: %s', $e::class, $this->redact($e->getMessage())),
+        ];
 
-        return $this->truncate($text, $this->maxVkLength);
+        foreach (\array_slice($frames, 0, 3) as $frame) {
+            $location = $this->location($frame['file'], $frame['line']);
+            $call = $frame['class'] !== '' ? "{$frame['class']}->{$frame['function']}()" : "{$frame['function']}()";
+
+            $lines[] = "  ↳ {$location} {$call}";
+        }
+
+        if ($e->getPrevious() instanceof \Throwable) {
+            $lines[] = \sprintf(
+                '  ⬑ предыдущее: %s (%s)',
+                $this->redact($e->getPrevious()->getMessage()),
+                $this->location($e->getPrevious()->getFile(), $e->getPrevious()->getLine()),
+            );
+        }
+
+        $lines[] = '📍 ' . $this->location($place, $line);
+
+        return $this->truncate(\implode("\n", $lines), $this->maxVkLength);
     }
 
     private function location(?string $file, ?int $line): string

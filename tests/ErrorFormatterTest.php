@@ -24,6 +24,16 @@ final class ErrorFormatterTest extends TestCase
         self::assertLessThanOrEqual(120, \mb_strlen($report->vk));
     }
 
+    public function testVkContainsExceptionClassAndFrame(): void
+    {
+        $report = (new ErrorFormatter(appTitle: 'Tower'))
+            ->format(new \RuntimeException('boom'));
+
+        self::assertStringContainsString('RuntimeException: boom', $report->vk);
+        self::assertStringContainsString('↳', $report->vk);
+        self::assertStringContainsString('ErrorFormatterTest.php', $report->vk);
+    }
+
     public function testConsoleHasAnsiAndPlainDoesNot(): void
     {
         $report = (new ErrorFormatter())->format(new \RuntimeException('boom'));
